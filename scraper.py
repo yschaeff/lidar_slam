@@ -14,11 +14,42 @@ HEADER_SIZE = 16
 FOOTER_SIZE = 4
 BYTES_PER_COLUMN = HEADER_SIZE + PIX_PER_COLUMN * BYTES_PIXEL + FOOTER_SIZE
 
-def file_to_buffers(f):
+PCAP_HEADER_SIZE = 24
+UDP_OVERHEAD = 42
+
+def is_pcap(f):
+    f.seek(0)
+    magic = unpack("I", f.read(4))[0]
+    f.seek(0)
+    is_capture    = magic in [0xa1b2c3d4, 0xd4c3b2a1, 0xa1b23c4d, 0x4d3cb2a1]
+    is_revsersed  = magic in [0xd4c3b2a1, 0x4d3cb2a1]
+    is_nanosecond = magic in [0xa1b23c4d, 0x4d3cb2a1]
+    return is_capture
+
+def raw_to_buffers(f):
     while True:
         buf = f.read(BYTES_PER_COLUMN * COLMNS_PER_BUFFER)
         if not buf: break
         yield buf
+
+def pcap_to_buffers(f):
+    head = f.read(PCAP_HEADER_SIZE)
+    pkt_meta_fmt = "IIII"
+    PktMeta = namedtuple("PktMeta", "ts_sec ts_usec incl_len orig_len")
+    while True:
+        chunk = f.read(calcsize(pkt_meta_fmt))
+        if not chunk: break
+        pktmeta = PktMeta._make(unpack(pkt_meta_fmt, chunk))
+        assert(pktmeta.incl_len == pktmeta.orig_len)
+        f.seek(UDP_OVERHEAD, 1)
+        pkt = f.read(pktmeta.incl_len - UDP_OVERHEAD)
+        yield pkt
+
+def file_to_buffers(f):
+    if is_pcap(f):
+        return pcap_to_buffers(f)
+    else:
+        return raw_to_buffers(f)
 
 def buffers_to_frames(buffers):
     struct = "Q H H I 768s I"
@@ -57,10 +88,11 @@ def frames_to_images(frames):
         img = Image.fromarray(data)
         yield img
 
+#with open("lombard_street_OS1.pcap", "rb") as f:
 with open("lombard_street_OS1.dd", "rb") as f:
     buffers = file_to_buffers(f)
     frames = buffers_to_frames(buffers)
     images = frames_to_images(frames)
-    ims = list(islice(images, 1, 1000))
+    ims = list(islice(images, 1, 100))
     ims[0].save("out.gif", save_all=True, append_images=ims, duration=20, loop=0)
 
