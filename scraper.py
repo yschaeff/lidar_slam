@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 
-import argparse, progressbar, numpy, json
+import argparse, progressbar, json
 import logging as log
+import numpy as np
 
 from struct import unpack, iter_unpack, calcsize
 from collections import namedtuple
@@ -16,6 +17,7 @@ HEADER_SIZE = 16
 FOOTER_SIZE = 4
 BYTES_PER_COLUMN = HEADER_SIZE + PIX_PER_COLUMN * BYTES_PIXEL + FOOTER_SIZE
 ROWS_PER_FRAME = 1024
+BEAM_ANGLE  = 33.468 ## derrived from calibration file
 
 PCAP_HEADER_SIZE = 24
 UDP_OVERHEAD = 42
@@ -85,7 +87,7 @@ def frames_to_images(frames, start, stop, azimuth_correction):
     size = (PIX_PER_COLUMN, ROWS_PER_FRAME)
     if stop: bar = progressbar.ProgressBar(maxval=stop-start).start()
     for i, frame in enumerate(islice(frames, start, stop)):
-        data = numpy.zeros(size, dtype=numpy.uint8)
+        data = np.zeros(size, dtype=np.uint8)
         for column in frame:
             y = column.column_id
             pixels = split_pixeldata_to_pixels(column.pixeldata)
@@ -125,10 +127,12 @@ def main(args):
     if args.calibration_file:
         with open(args.calibration_file, "r") as f:
             calib = json.load(f)
-            azimuths = [a for a in calib['beam_azimuth_angles']]
+            azimuths = calib['beam_azimuth_angles']
+            altitudes = calib['beam_altitude_angles']
     else:
         log.warning("No calibration file given. Estimating azimuth errors.")
         azimuths = [a*360/1024 for a in [9,3,-3,-9]*16]
+        altitudes = np.arange(-BEAM_ANGLE/2,BEAM_ANGLE/2,BEAM_ANGLE/64)
     azimuth_pixel_corrections = [a*1024/360 for a in azimuths]
 
     with open(args.read_file, "rb") as f:
