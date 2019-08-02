@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import argparse, progressbar, numpy
+import argparse, progressbar, numpy, json
 import logging as log
 
 from struct import unpack, iter_unpack, calcsize
@@ -78,7 +78,10 @@ def split_pixeldata_to_pixels(pixeldata):
     for chunck in iter_unpack(struct, pixeldata):
         yield Pixel._make(chunck)
 
-def frames_to_images(frames, start, stop):
+def frames_to_images(frames, start, stop, azimuth_correction):
+    def fix_azimuth(x, y):
+        return int(y + azimuth_correction[x])
+
     size = (PIX_PER_COLUMN, ROWS_PER_FRAME)
     if stop: bar = progressbar.ProgressBar(maxval=stop-start).start()
     for i, frame in enumerate(islice(frames, start, stop)):
@@ -87,8 +90,11 @@ def frames_to_images(frames, start, stop):
             y = column.column_id
             pixels = split_pixeldata_to_pixels(column.pixeldata)
             for x, pixel in enumerate(pixels):
-                yy = y-(x%4)*6
+                yy = fix_azimuth(x, y)
                 data[x, yy%ROWS_PER_FRAME] = 255*(pixel.range & 0xFFFFF)/100000
+                #data[x, yy%ROWS_PER_FRAME] = 255*(pixel.reflectivity & 0xFFFFF)/35500
+                #data[x, yy%ROWS_PER_FRAME] = 255*(pixel.signal & 0xFFFFF)/1500
+                #data[x, yy%ROWS_PER_FRAME] = 255*(pixel.noise & 0xFFFFF)/1500
         img = Image.fromarray(data)
         log.debug(f"writing img {i}")
         yield img
@@ -113,13 +119,28 @@ def parse_arguments():
         action="store", type=float, default=62.5)
     return parser.parse_args()
 
-args = parse_arguments()
-log.basicConfig(level=args.log_level)
-FRAMETIME_MS = 1000//args.fps
-with open(args.read_file, "rb") as f:
-    buffers = file_to_buffers(f)
-    frames = buffers_to_frames(buffers)
-    images = frames_to_images(frames, start=0, stop=args.framecount)
-    first_img = next(images)
-    first_img.save(args.outfile, save_all=True, append_images=images, duration=FRAMETIME_MS, loop=0)
+def main(args):
+    FRAMETIME_MS = 1000//args.fps
 
+    if args.calibration_file:
+        with open(args.calibration_file, "r") as f:
+            calib = json.load(f)
+            azimuths = [a for a in calib['beam_azimuth_angles']]
+    else:
+        log.warning("No calibration file given. Estimating azimuth errors.")
+        azimuths = [a*360/1024 for a in [9,3,-3,-9]*16]
+    azimuth_pixel_corrections = [a*1024/360 for a in azimuths]
+
+    with open(args.read_file, "rb") as f:
+        buffers = file_to_buffers(f)
+        frames = buffers_to_frames(buffers)
+        images = frames_to_images(frames, start=1, stop=args.framecount,
+            azimuth_correction=azimuth_pixel_corrections)
+        first_img = next(images)
+        first_img.save(args.outfile, save_all=True, append_images=images,
+            duration=FRAMETIME_MS, loop=0)
+
+if __name__ == '__main__':
+    args = parse_arguments()
+    log.basicConfig(level=args.log_level)
+    main(args)
