@@ -5,6 +5,8 @@ from collections import namedtuple
 import numpy
 from PIL import Image
 from itertools import islice
+import argparse
+import logging as log
 
 PIX_PER_COLUMN = 64
 COLMNS_PER_BUFFER = 16
@@ -13,6 +15,7 @@ TICK_PER_REVOLUTION = 90112
 HEADER_SIZE = 16
 FOOTER_SIZE = 4
 BYTES_PER_COLUMN = HEADER_SIZE + PIX_PER_COLUMN * BYTES_PIXEL + FOOTER_SIZE
+ROWS_PER_FRAME = 1024
 
 PCAP_HEADER_SIZE = 24
 UDP_OVERHEAD = 42
@@ -75,24 +78,49 @@ def split_pixeldata_to_pixels(pixeldata):
     for chunck in iter_unpack(struct, pixeldata):
         yield Pixel._make(chunck)
 
-def frames_to_images(frames):
-    size = (64, 1024)
-    for frame in frames:
+import progressbar
+def frames_to_images(frames, start, stop):
+    size = (PIX_PER_COLUMN, ROWS_PER_FRAME)
+    if stop: bar = progressbar.ProgressBar(maxval=stop-start).start()
+    for i, frame in enumerate(islice(frames, start, stop)):
         data = numpy.zeros(size, dtype=numpy.uint8)
         for column in frame:
             y = column.column_id
             pixels = split_pixeldata_to_pixels(column.pixeldata)
             for x, pixel in enumerate(pixels):
                 yy = y-(x%4)*6
-                data[x, yy%1024] = 255*(pixel.range & 0xFFFFF)/100000
+                data[x, yy%ROWS_PER_FRAME] = 255*(pixel.range & 0xFFFFF)/100000
         img = Image.fromarray(data)
+        log.debug(f"writing img {i}")
         yield img
+        if stop: bar.update(i)
+    if stop: bar.finish()
 
-#with open("lombard_street_OS1.pcap", "rb") as f:
-with open("lombard_street_OS1.dd", "rb") as f:
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="TODO description",
+        epilog="2019 - KapiteinLabs - yuri@kapiteinlabs.com")
+    parser.add_argument("-l", "--log-level", help="Set loglevel",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        type=str.upper, action="store", default="INFO")
+    parser.add_argument("-c", "--calibration_file", help="JSON file containing calibration info",
+        action="store", type=str, default=None)
+    parser.add_argument("-r", "--read-file", help="PCAP/RAW file containing OS1 data",
+        action="store", type=str, required=True)
+    parser.add_argument("-o", "--outfile", help="GIF to write",
+        action="store", type=str, required=True)
+    parser.add_argument("-n", "--framecount", help="Number of frames",
+        action="store", type=int)
+    parser.add_argument("-f", "--fps", help="Frame rate of output gif",
+        action="store", type=float, default=62.5)
+    return parser.parse_args()
+
+args = parse_arguments()
+log.basicConfig(level=args.log_level)
+FRAMETIME_MS = 1000//args.fps
+with open(args.read_file, "rb") as f:
     buffers = file_to_buffers(f)
     frames = buffers_to_frames(buffers)
-    images = frames_to_images(frames)
-    ims = list(islice(images, 1, 100))
-    ims[0].save("out.gif", save_all=True, append_images=ims, duration=20, loop=0)
+    images = frames_to_images(frames, start=0, stop=args.framecount)
+    first_img = next(images)
+    first_img.save(args.outfile, save_all=True, append_images=images, duration=FRAMETIME_MS, loop=0)
 
