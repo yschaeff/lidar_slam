@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 
+import argparse, progressbar, numpy
+import logging as log
+
 from struct import unpack, iter_unpack, calcsize
 from collections import namedtuple
-import numpy
 from PIL import Image
 from itertools import islice
-import argparse
-import logging as log
 
 PIX_PER_COLUMN = 64
 COLMNS_PER_BUFFER = 16
@@ -78,7 +78,6 @@ def split_pixeldata_to_pixels(pixeldata):
     for chunck in iter_unpack(struct, pixeldata):
         yield Pixel._make(chunck)
 
-import progressbar
 def frames_to_images(frames, start, stop):
     size = (PIX_PER_COLUMN, ROWS_PER_FRAME)
     if stop: bar = progressbar.ProgressBar(maxval=stop-start).start()
